@@ -1,0 +1,5 @@
++ @T1 Tool
++ @T1.Name "shell.run"
++ @T1.Arguments.Command "true"
++ @T1.Reason "Verify deterministic structural case recovery"
+! @T1

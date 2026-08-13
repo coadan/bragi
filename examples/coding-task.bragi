@@ -1,0 +1,33 @@
++ @s1 plan_step
++ @s1.intent "Add deterministic replay for accepted protocol records"
++ @s1.acceptance "Replaying the same log produces the same materialized state"
++ @s1.status "planned"
+! @s1
++ @p1 artifact
++ @p1.kind "patch"
++ @p1.path "patches/replay.diff"
++ @p1.media "text/x-diff"
++ @p1.content |
+|diff --git a/internal/stream/replay.go b/internal/stream/replay.go
+|new file mode 100644
+|--- /dev/null
+|+++ b/internal/stream/replay.go
+|@@ -0,0 +1,3 @@
+|+package stream
+|+
+|+// Replay applies accepted records in canonical sequence order.
+! @p1.content
+! @p1
++ @t1 tool
++ @t1.name "edit.apply"
++ @t1.arguments.artifact @p1
++ @t1.reason "Apply the reviewed replay implementation"
+! @t1
++ @c1 comprehension
++ @c1.change "Added the canonical replay owner"
++ @c1.why "Recovery and client snapshots need deterministic reconstruction"
++ @c1.boundary_delta "Stream parsing remains separate from replayed canonical state"
++ @c1.new_invariants "Only accepted canonical records affect replay"
++ @c1.verification "Focused replay tests plus full Go test suite"
++ @c1.maintainer_model "Parser accepts source; replay owns canonical reconstruction"
+! @c1

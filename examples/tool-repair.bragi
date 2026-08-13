@@ -1,0 +1,6 @@
++ @t1 tool
++ @t1.name "repo.inspect"
++ @t1.arguments.query "Qwen 3 benchmarks"
+~ @t1.arguments.query "Qwen3.8 local inference benchmarks"
++ @t1.reason "Establish the current benchmark surface before choosing a design"
+! @t1
