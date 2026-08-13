@@ -1,27 +1,62 @@
 # Bragi
 
-**Structured streaming for agent harnesses.**
+**Make partial LLM output useful, structured, and safe.**
 
-Bragi is a small protocol that lets an LLM build structured output as it
-generates, correct that output before it is final, and explicitly propose when
-an action is ready.
+Bragi is a streaming protocol for agent harnesses. It makes partial model
+output first-class for display: typed, validated, addressable state that a UI
+can render as soon as each record arrives—not an incomplete blob waiting for
+the full response to finish.
 
-It is designed for agent harnesses that need to consume useful model output
-early without confusing partial text with trusted state—or a model request
-with permission to execute.
+The model can build that state incrementally, correct it before it is final,
+and explicitly propose when an action is ready. The harness remains in control
+of what is trusted, shown, executed, and considered complete.
+
+## Partial output as a product primitive
+
+Imagine a coding agent beginning to plan a change:
 
 ```text
-+ @t1 tool
-+ @t1.name "search"
-+ @t1.arguments.query "Qwen 3 benchmarks"
-~ @t1.arguments.query "Qwen3.8 local inference benchmarks"
-+ @t1.reason "Find the relevant benchmark evidence"
-! @t1
++ @s1 plan_step
++ @s1.intent "Add deterministic replay"
 ```
 
-The model creates a tool request, corrects the query, and proposes the finished
-request. The harness validates every step and remains responsible for deciding
-whether the tool may run.
+The response is not finished, but the harness already has something useful: a
+validated `plan_step` draft with stable identity `@s1`. A UI can immediately
+render a plan card titled **Add deterministic replay** while generation
+continues. Later records enrich the same card:
+
+```text
++ @s1.acceptance "Replaying the same log produces the same state"
+~ @s1.intent "Add deterministic replay for accepted records"
++ @s1.status "planned"
+! @s1
+```
+
+Each accepted record produces a small, predictable display update:
+
+| Record | What the UI can do |
+| --- | --- |
+| `+ @s1 plan_step` | Reserve a stable plan item keyed by `@s1`. |
+| `+ @s1.intent ...` | Show the plan item as soon as its title is useful. |
+| `+ @s1.acceptance ...` | Add acceptance criteria to the existing card. |
+| `~ @s1.intent ...` | Correct the title in place without adding a duplicate. |
+| `+ @s1.status ...` | Display a typed status. |
+| `! @s1` | Mark the validated revision as committed. |
+
+The UI does not need to reparse a growing Markdown response or rebuild a whole
+JSON document on every token. It projects typed changes onto components keyed
+by stable entity IDs. If generation stops between records, the accepted prefix
+remains displayable as a draft. Nothing incomplete is guessed, and nothing is
+accidentally committed.
+
+Partial does not mean indiscriminate. Profiles can define publication guards,
+so content stays hidden until fields such as speaker, audience, or channel are
+known. The harness decides which validated drafts are safe and useful to show.
+
+This is the core value of Bragi: an agent harness can react to meaningful,
+structured progress throughout generation—rendering plans, messages,
+artifacts, checks, findings, and tool requests as they take shape rather than
+waiting for one final object.
 
 > Bragi gives models room to revise their intent while the harness retains
 > control over state, effects, and completion.
@@ -43,7 +78,7 @@ correct a value, it may have to regenerate the object or issue another call.
 If tool-call completion is treated as execution approval, uncertainty can turn
 into an effect too quickly.
 
-Bragi makes incremental generation part of the protocol:
+Bragi makes partial output a first-class part of the protocol:
 
 - every complete line can update typed draft state;
 - the model can correct or retract draft values in-band;
@@ -98,21 +133,6 @@ What the different parts of the system see:
    task state before dispatching anything.
 
 No source line directly runs a command.
-
-### If generation is interrupted
-
-Suppose the provider connection ends during the final line:
-
-```text
-+ @s1 plan_step
-+ @s1.intent "Add replay support"
-+ @s1.acceptance "The same log produces the same state"
-+ @s1.status "in-prog
-```
-
-The first three records remain valid draft state. The incomplete last record
-does not apply. A host can resume from the last accepted sequence instead of
-asking the model to recreate the entire object.
 
 ## How Bragi fits into a harness
 
