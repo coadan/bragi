@@ -13,6 +13,35 @@ treating incomplete JSON, provider completion, or model claims as authoritative
 workflow state. It is implementation-backed by a Go decoder, profile loader,
 materializer, replay path, conformance command, and executable fixtures.
 
+## Why Bragi fits LLMs
+
+LLMs generate autoregressively: useful state appears one piece at a time, and
+a better value may become apparent only after an earlier value has already
+been emitted. Bragi treats that behavior as a protocol property instead of an
+error case. The model can append a fact, revise it in-band, and propose the
+revision it is ready to stand behind.
+
+The elegance is alignment rather than clever syntax:
+
+- four low-entropy operators—`+`, `~`, `-`, and `!`—cover construction,
+  correction, retraction, and commitment;
+- every complete line is independently validated, so a cutoff does not erase
+  the accepted prefix;
+- stable entity IDs preserve identity across corrections, references, replay,
+  and client rendering;
+- drafts give the model room to be uncertain without turning uncertainty into
+  execution; and
+- an append-only canonical log preserves how the current state was reached
+  without forcing clients to render the whole history.
+
+> Bragi gives the model freedom to revise intent while the runtime retains
+> authority over truth, effects, and completion.
+
+Generation, validation, execution, and presentation can therefore advance at
+their own boundaries. The model emits a compact language suited to sequential
+generation; the rest of the system receives explicit typed state with durable
+provenance.
+
 > **Status:** The Bragi 1.x syntax and semantics are stable. Host adoption is
 > experimental until the [comparative benchmark gate](docs/benchmark.md)
 > passes across at least two model families.
