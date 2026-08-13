@@ -1,119 +1,83 @@
 # Bragi
 
-**Let models revise intent before runtimes commit effects.**
+**Structured streaming for agent harnesses.**
 
-Bragi 1.0 is a small, model-native protocol for streaming typed state,
-repairing drafts in-band, and explicitly proposing commits while generation is
-still in progress. A validating runtime turns the model's source records into
-an append-only canonical event log; the runtime, never the model, remains the
-authority for side effects and task completion.
+Bragi is a small protocol that lets an LLM build structured output as it
+generates, correct that output before it is final, and explicitly propose when
+an action is ready.
 
-Bragi is designed for agent harnesses that want useful partial state without
-treating incomplete JSON, provider completion, or model claims as authoritative
-workflow state. It is implementation-backed by a Go decoder, profile loader,
-materializer, replay path, conformance command, and executable fixtures.
-
-## Why Bragi fits LLMs
-
-LLMs generate autoregressively: useful state appears one piece at a time, and
-a better value may become apparent only after an earlier value has already
-been emitted. Bragi treats that behavior as a protocol property instead of an
-error case. The model can append a fact, revise it in-band, and propose the
-revision it is ready to stand behind.
-
-The elegance is alignment rather than clever syntax:
-
-- four low-entropy operators—`+`, `~`, `-`, and `!`—cover construction,
-  correction, retraction, and commitment;
-- every complete line is independently validated, so a cutoff does not erase
-  the accepted prefix;
-- stable entity IDs preserve identity across corrections, references, replay,
-  and client rendering;
-- drafts give the model room to be uncertain without turning uncertainty into
-  execution; and
-- an append-only canonical log preserves how the current state was reached
-  without forcing clients to render the whole history.
-
-> Bragi gives the model freedom to revise intent while the runtime retains
-> authority over truth, effects, and completion.
-
-Generation, validation, execution, and presentation can therefore advance at
-their own boundaries. The model emits a compact language suited to sequential
-generation; the rest of the system receives explicit typed state with durable
-provenance.
-
-> **Status:** The Bragi 1.x syntax and semantics are stable. Host adoption is
-> experimental until the [comparative benchmark gate](docs/benchmark.md)
-> passes across at least two model families.
-
-- [Read the normative Bragi 1.0 specification](docs/spec.md)
-- [Run the conformance implementation](docs/conformance.md)
-- [See complete source streams](examples/)
-
-## The problem
-
-Autoregressive models produce useful information sequentially, but many
-structured interfaces become meaningful only after a complete object or tool
-call closes. That couples together concerns with different owners and failure
-modes:
-
-- model generation and correction;
-- schema validation and canonical history;
-- authorization of external effects;
-- client presentation; and
-- workflow completion.
-
-When those concerns share one completion-shaped interface, partial output has
-weak semantics, corrections tend to require regeneration or parser inference,
-and a provider stop can be mistaken for successful task completion.
-
-Bragi gives the model one narrower job:
-
-> Incrementally construct typed intent, repair it while it is still a draft,
-> and explicitly propose the revision that the runtime should validate.
-
-The runtime gives every accepted record a canonical sequence, preserves
-rejected records as evidence, materializes the current view, and applies its
-own policy before any effect can run.
-
-### Example: a cutoff should not erase useful state
-
-Suppose a model is describing a plan step as one streamed JSON object and the
-provider connection ends here:
-
-```json
-{
-  "type": "plan_step",
-  "intent": "Add replay support",
-  "acceptance": "The same log produces the same state",
-  "status": "in-prog
-```
-
-The intent and acceptance text arrived, but the enclosing value never became
-valid JSON. A consumer must buffer it, adopt partial-JSON semantics, or ask the
-model to generate the object again.
-
-With Bragi, complete records before the cutoff already have defined meaning:
+It is designed for agent harnesses that need to consume useful model output
+early without confusing partial text with trusted state—or a model request
+with permission to execute.
 
 ```text
-+ @s1 plan_step
-+ @s1.intent "Add replay support"
-+ @s1.acceptance "The same log produces the same state"
-+ @s1.status "in-prog
++ @t1 tool
++ @t1.name "search"
++ @t1.arguments.query "Qwen 3 benchmarks"
+~ @t1.arguments.query "Qwen3.8 local inference benchmarks"
++ @t1.reason "Find the relevant benchmark evidence"
+! @t1
 ```
 
-The first three records are accepted into draft `@s1`. The incomplete final
-record is diagnostic evidence only and does not mutate the draft. The host can
-resume from the last canonical sequence; the model does not need to recreate
-the accepted prefix.
+The model creates a tool request, corrects the query, and proposes the finished
+request. The harness validates every step and remains responsible for deciding
+whether the tool may run.
 
-### Example: correction should happen before execution
+> Bragi gives models room to revise their intent while the harness retains
+> control over state, effects, and completion.
 
-A model may realize that its first command is incomplete only after emitting
-it. If a closed tool-call object is also the dispatch boundary, there is no
-safe interval in which to revise it.
+> **Status:** Bragi 1.x has a stable protocol boundary and a working Go
+> reference implementation. Adoption remains experimental until the
+> [benchmark gate](docs/benchmark.md) passes across at least two model families.
 
-Bragi keeps the request mutable until an explicit commit proposal:
+## Why Bragi exists
+
+LLMs generate from left to right. Useful information appears gradually, and a
+better answer may become clear only after an earlier value has already been
+emitted.
+
+Most structured interfaces work differently. They expect a complete object or
+tool call before the result becomes useful. If generation stops halfway
+through, the harness may be left with invalid JSON. If the model needs to
+correct a value, it may have to regenerate the object or issue another call.
+If tool-call completion is treated as execution approval, uncertainty can turn
+into an effect too quickly.
+
+Bragi makes incremental generation part of the protocol:
+
+- every complete line can update typed draft state;
+- the model can correct or retract draft values in-band;
+- a cutoff preserves the accepted prefix;
+- stable IDs keep entities recognizable across updates and replay; and
+- an explicit commit proposal separates “this is my intended request” from
+  “the harness authorizes this action.”
+
+The result is a small model-facing language and a conventional, validated state
+model for the rest of the system.
+
+## The four operations
+
+Bragi uses four primary operators:
+
+| Operator | Plain-language meaning |
+| --- | --- |
+| `+` | Create something or add a value. |
+| `~` | Replace a draft value. |
+| `-` | Remove a draft value. |
+| `!` | Seal text or propose an entity for commit. |
+
+Entities have stable IDs such as `@t1`. A
+[profile](profiles/midgard-v1.md) tells the model and runtime which entity
+types and fields are available for a domain.
+
+This is enough to build tool requests, messages, artifacts, findings, checks,
+questions, completion proposals, and other typed objects without requiring one
+large nested response.
+
+## A practical example
+
+Imagine a coding agent preparing a command. It first chooses the ordinary test
+suite, then realizes the task needs the race detector:
 
 ```text
 + @t1 tool
@@ -124,271 +88,94 @@ Bragi keeps the request mutable until an explicit commit proposal:
 ! @t1
 ```
 
-Both command values remain in canonical history, while the materialized draft
-contains only the replacement. Even after `commit.accepted`, the command is
-merely eligible for the host's sandbox, capability, policy, budget, and
-idempotency checks. No source line directly runs it.
+What the different parts of the system see:
 
-### Example: partial content should not be misrouted
+1. The model builds a draft one field at a time.
+2. The replacement updates the current command without erasing its history.
+3. `! @t1` asks the Bragi runtime to validate the current revision.
+4. A successful commit makes the request eligible for host policy.
+5. The harness still checks its sandbox, capabilities, budget, idempotency, and
+   task state before dispatching anything.
 
-Streaming content to a client before its speaker, audience, or channel is
-known can expose text in the wrong place. The Midgard profile marks those
-fields as publication guards:
+No source line directly runs a command.
 
-```text
-+ @m1 message
-+ @m1.content |
-|The deployment contains a security-sensitive migration.
-! @m1.content
-+ @m1.speaker "assistant"
-+ @m1.audience "maintainer"
-+ @m1.channel "private-review"
-! @m1
-```
+### If generation is interrupted
 
-The runtime may materialize the content immediately, but a projection
-withholds it until all routing guards contain accepted, closed values and any
-host routing predicate passes. Once publishable, later revisions retain the
-same entity identity instead of creating a second message.
-
-### Example: “done” is not evidence that the task is done
-
-A model can request completion:
+Suppose the provider connection ends during the final line:
 
 ```text
-+ @done1 completion
-+ @done1.requested_outcome "done"
-! @done1
++ @s1 plan_step
++ @s1.intent "Add replay support"
++ @s1.acceptance "The same log produces the same state"
++ @s1.status "in-prog
 ```
 
-That commit may be perfectly valid Bragi while the task still has a failed
-check, unresolved effect, or blocking finding. The host evaluates its own
-completion contract and may append a result such as:
+The first three records remain valid draft state. The incomplete last record
+does not apply. A host can resume from the last accepted sequence instead of
+asking the model to recreate the entire object.
 
-```json
-{
-  "kind": "completion.evaluated",
-  "outcome": "incomplete",
-  "remaining": ["check:test-race", "finding:data-race"]
-}
-```
+## How Bragi fits into a harness
 
-The canonical host result, not provider EOF or the model-authored word
-`"done"`, controls lifecycle state.
-
-## The source language
-
-The core language has four primary operators:
-
-```text
-+ @t1 tool
-+ @t1.name "search"
-+ @t1.arguments.query "Qwen 3 benchmarks"
-~ @t1.arguments.query "Qwen3.8 local inference benchmarks"
-! @t1
-```
-
-| Operator | Meaning |
-| --- | --- |
-| `+` | Create an entity, add a field, or append a stable reference. |
-| `~` | Replace an existing draft scalar without rewriting history. |
-| `-` | Retract a draft field or collection member. |
-| `!` | Seal an open literal or propose an entity revision for commit. |
-
-Entities use session-local stable IDs such as `@t1`. A negotiated
-[profile](profiles/midgard-v1.md) declares the available entity types, fields,
-mutation rules, effect classes, publication guards, and resource limits.
-
-Large text remains incremental without embedding a nested JSON string:
-
-```text
-+ @p1 artifact
-+ @p1.kind "patch"
-+ @p1.content |
-|diff --git a/a.go b/a.go
-|--- a/a.go
-|+++ b/a.go
-|
-! @p1.content
-! @p1
-```
-
-Sealing the literal closes the field. Committing the entity is a separate
-operation.
-
-## The protocol model
-
-Bragi keeps six concepts distinct:
-
-| Concept | Purpose |
-| --- | --- |
-| Source record | One complete model-authored operation ending in LF. |
-| Entity | Typed, revisioned state addressed by a stable session-local ID. |
-| Profile | The exact negotiated schema and limits for one domain. |
-| Commit proposal | A model request to validate one entity revision. |
-| Canonical event | A sequenced runtime-owned fact produced during validation. |
-| Projection | A client-facing view derived from canonical state. |
-
-Raw provider deltas are not source records. Source records are not canonical
-events. Accepted commits are not effect authorization. Projections are not
-orchestration state.
+Bragi separates responsibilities that are often bundled together:
 
 ```mermaid
 flowchart LR
-    P[Provider token deltas] --> D[Bragi decoder]
-    D --> V[Profile validation]
-    V --> E[Canonical event log]
-    E --> M[Materialized state]
-    M --> H[Host policy and effects]
-    E --> C[Client projections]
+    M[LLM output] --> B[Bragi validation]
+    B --> S[Typed state and event log]
+    S --> H[Harness policy and effects]
+    S --> U[UI and other projections]
 ```
 
-## How it works
+- The **model** constructs and revises intent.
+- The **Bragi runtime** validates records and maintains canonical state.
+- The **harness** owns tools, policy, side effects, budgets, and task
+  completion.
+- The **UI** renders a projection of state; it does not become the source of
+  truth.
 
-1. Before generation, the host fixes the protocol version, exact profile and
-   fingerprint, limits, and any negotiated extensions.
-2. The decoder buffers only an incomplete line or open literal and emits
-   complete source records.
-3. The materializer atomically accepts or rejects each record. A rejection
-   never changes the materialized view.
-4. `~` and `-` add corrective history while an entity is still mutable; they
-   never rewrite accepted events.
-5. `! @id` asks the runtime to validate the current revision. Acceptance pins
-   references and makes the revision canonical.
-6. For an effectful entity, the host still checks capability, policy, budget,
-   idempotency, and current task state before dispatch.
-7. Clients consume projections keyed by canonical sequence, entity ID, and
-   revision. Replay reconstructs the same accepted state without re-executing
-   effects.
+This distinction matters most around actions and completion. A valid tool
+entity does not mean the tool ran. A model-authored completion proposal does
+not mean the task is done. Those decisions belong to the harness and its
+evidence.
 
-```mermaid
-sequenceDiagram
-    participant Model
-    participant Runtime
-    participant Host
-    participant Client
+## Where Bragi works best
 
-    Model->>Runtime: + @t1 tool
-    Runtime-->>Client: draft @t1, revision 1
-    Model->>Runtime: + fields, then ~ repair
-    Runtime-->>Client: update the same draft
-    Model->>Runtime: ! @t1
-    Runtime->>Runtime: Validate profile and pin references
-    Runtime-->>Client: commit.accepted
-    Runtime->>Host: Eligible effect intent
-    Host->>Host: Check policy, budget, and idempotency
-    Host-->>Client: Effect lifecycle events
-```
+Bragi is aimed at agent harnesses that:
 
-## Three authorities
+- stream mixed structured output such as messages, tools, artifacts, plans,
+  checks, and findings;
+- want to expose useful partial state before a full response completes;
+- need model-authored corrections without regenerating an entire object;
+- persist sessions and require deterministic replay;
+- distinguish proposed actions from authorized effects; or
+- render live state in a UI using stable entity identity.
 
-| Authority | Owns |
-| --- | --- |
-| Model | Draft entities, in-band repairs, tool or human-input requests, findings, and commit proposals. |
-| Runtime and host | Canonical sequence, validation, policy, effects, budgets, persistence, phase changes, and completion evaluation. |
-| Human | Material scope decisions and explicit acceptance of known residual findings. |
+Bragi is not intended to replace provider APIs, MCP, JSON-RPC, WebSocket, SSE,
+authentication, tool discovery, or host policy. It is the model-to-harness
+language between provider token output and trusted application state.
 
-`! @t1` is a proposal, not permission. A `commit.accepted` event means the
-entity passed Bragi validation; it does not mean a command ran or a task
-finished.
+## What the runtime guarantees
 
-## Bragi and adjacent interfaces
+The detailed rules live in the [specification](docs/spec.md), but the central
+guarantees are straightforward:
 
-Bragi does not replace provider APIs, native tool calling, JSON, MCP,
-WebSocket, or SSE. Those interfaces sit at different boundaries and can be
-used together.
+- A record is accepted or rejected as one unit.
+- Rejected and incomplete records do not change state.
+- Corrections append history rather than rewriting it.
+- References point to specific committed revisions.
+- Effectful entities cannot be edited after acceptance.
+- Replaying canonical events reconstructs the same state without rerunning
+  effects.
+- Model EOF and model completion claims never end the task by themselves.
 
-| Question | Native tool call or streamed JSON | Bragi source |
-| --- | --- | --- |
-| Main unit | A provider-defined call or structured value. | An independently validated state operation. |
-| Useful partial state | Depends on provider deltas or parsing an incomplete value. | Every accepted record may update the typed view. |
-| Correction | Regenerate, patch outside the value, or issue another call. | Append `~` or `-` while the revision is still a draft. |
-| Effect boundary | Commonly tied to tool-call closure and host handling. | Explicit commit acceptance, followed by separate host authorization. |
-| Truncation | May leave an incomplete structured value. | Accepted records survive; an incomplete final record is not applied. |
-| Transport | Provider- or application-defined. | Deliberately unspecified; source and projections use separate bindings. |
+Bragi also permits a small, auditable set of mechanical recoveries for common
+generation variations. It does not guess semantic intent, repair payloads, or
+fuzzy-match tools and fields.
 
-This table describes protocol boundaries, not a performance win. Whether
-Bragi improves validity, latency, recovery cost, or token use is an open
-benchmark question.
+## Try it
 
-## Why the protocol looks this way
-
-### Operations are append-oriented
-
-Models generate left to right. Bragi lets each complete line become a bounded
-validation unit and lets corrections append new facts instead of asking a
-runtime to reinterpret old bytes.
-
-### Stable IDs replace positions
-
-Entities and collection members use references rather than array indexes.
-Corrections therefore retain identity across materialization, presentation,
-and replay.
-
-### Drafts and effects have different boundaries
-
-Only uncommitted intent may be revised. Effectful entities become immutable
-after acceptance, and replay never re-executes them. A corrected effect uses a
-new entity ID and may identify what it supersedes.
-
-### Recovery is closed and auditable
-
-Bragi recovers only structural ASCII casing, CRLF endings, and a missing final
-LF after authoritative normal provider completion. Recovery metadata is
-canonical evidence. The decoder does not trim whitespace, repair JSON,
-fuzzy-match schema names, infer targets, or alter payload content.
-
-### Profiles carry domain meaning
-
-The core grammar does not absorb tool catalogs, coding workflows, or product
-policy. A profile supplies domain types and limits and is negotiated by name,
-version, and exact-byte fingerprint before generation.
-
-### Model syntax and client transport are separate
-
-The line language is optimized for model emission. Canonical events and
-clients may use conventional typed JSON. The optional
-[WebSocket binding](docs/websocket-binding.md) projects server-owned events; it
-does not leak transport concerns into model syntax.
-
-### Completion is server evidence
-
-Model EOF, provider finish reason, and a committed `completion` entity are
-observations. The host evaluates its completion contract and emits the
-terminal lifecycle result.
-
-## Trust and safety invariants
-
-- No external effect follows from raw model text or an uncommitted draft.
-- Every source record is accepted or rejected atomically.
-- Rejected records do not mutate materialized state.
-- Canonical history is append-only; repairs change the view, not the past.
-- References resolve to specific committed revisions.
-- Publication guards may withhold provisional content until routing fields are
-  accepted and closed.
-- Effect idempotency derives from host and accepted entity identity, not raw
-  source text.
-- Replay fails on gaps or irreproducible commits instead of guessing.
-- Client messages and projections never become canonical state implicitly.
-
-## What Bragi does not do
-
-Bragi 1.0 deliberately does not standardize:
-
-- provider token transport or constrained-decoding APIs;
-- RPC, tool discovery, authentication, or capability authorization;
-- storage encoding or a universal event database;
-- host workflow, planning roles, review policy, or completion criteria;
-- client transport, presentation cadence, or UI architecture;
-- private chain of thought or arbitrary binary streaming; or
-- broad grammar repair and semantic inference.
-
-These boundaries keep the model language small and leave authority with the
-systems that can validate and enforce it.
-
-## Try the reference implementation
-
-Bragi currently requires Go 1.25 or newer.
+The repository includes a Go 1.25 reference implementation and example
+streams.
 
 ```sh
 go test ./...
@@ -397,76 +184,37 @@ go run ./cmd/bragi-check \
   examples/*.bragi
 ```
 
-Use `-json` to print canonical events as JSON Lines:
+Use `-json` to inspect the canonical events produced from a stream:
 
 ```sh
 go run ./cmd/bragi-check \
   -json \
   -profile profiles/midgard-v1.json \
-  examples/coding-task.bragi
+  examples/tool-repair.bragi
 ```
 
-A conforming stream exits successfully only when every record and commit is
-accepted, every literal is sealed, and no draft remains at EOF.
+## Learn more
 
-## Implementation checklist
-
-### Model-facing runtime
-
-- Fix the full session tuple before generation and reject unsupported tuples.
-- Decode incrementally without applying partial ordinary lines.
-- Enforce profile byte, entity, and record limits.
-- Apply only the specified deterministic recoveries and record provenance.
-- Atomically validate each operation and preserve diagnostics.
-- Pin references and effect identity at commit acceptance.
-- Reconstruct accepted state deterministically from canonical events.
-
-### Host
-
-- Treat accepted effectful entities as eligible intent, not authorization.
-- Check capabilities, policy, budgets, idempotency, and lifecycle state before
-  dispatch.
-- Keep provider, Bragi core, effect, and workflow events distinct.
-- Evaluate completion from server evidence rather than model claims.
-- Retain raw source only as access-controlled diagnostic evidence.
-
-### Client projection
-
-- Consume canonical sequence order and deduplicate redelivery.
-- Key provisional state by entity ID and revision so repairs settle in place.
-- Respect publication guards and routing predicates.
-- Distinguish drafts, commits, effects, rejections, and verified terminal state.
-- Recover from disconnects using replay or snapshot-plus-tail delivery.
-
-## Documents
-
-- [Bragi 1.0 specification](docs/spec.md) is the normative protocol.
-- [Grammar](grammar/bragi.ebnf) is the machine-oriented syntax companion.
-- [Focused proposal](docs/proposal.md) explains the original design and
-  authority model.
-- [Conformance](docs/conformance.md) documents the Go reference implementation
-  and required properties.
-- [Evidence and readiness](docs/evidence.md) records facts, uncertainties, and
-  the adoption gate.
-- [Benchmark plan](docs/benchmark.md) defines the comparisons required before
-  host adoption.
-- [WebSocket binding](docs/websocket-binding.md) defines one optional client
-  projection.
-- [Midgard profile](profiles/midgard-v1.md) demonstrates a coding-harness
-  domain schema.
-- [Decision records](docs/decisions/README.md) preserve the stable 1.x design
-  boundary.
+- [Bragi 1.0 specification](docs/spec.md) — normative syntax and semantics
+- [Examples](examples/) — complete model-authored streams
+- [Conformance](docs/conformance.md) — reference implementation and required
+  properties
+- [Grammar](grammar/bragi.ebnf) — machine-oriented syntax
+- [Midgard profile](profiles/midgard-v1.md) — coding-harness domain model
+- [WebSocket binding](docs/websocket-binding.md) — optional client projection
+- [Evidence and readiness](docs/evidence.md) — design evidence and open
+  questions
+- [Benchmark plan](docs/benchmark.md) — adoption criteria and comparisons
+- [Decision records](docs/decisions/README.md) — stable architectural choices
 
 ## Project status
 
-The reference implementation validates the shipped examples, materializes
-typed state, and replays canonical events deterministically. The 1.x protocol
-boundary is stable; an incompatible grammar or semantic change requires Bragi
-2.
+The core Bragi 1.x grammar and semantics are stable. The reference decoder,
+profile loader, materializer, replay path, conformance command, and fixtures
+are implemented and tested.
 
-Bragi's performance advantage remains a hypothesis. It should not replace an
-existing model protocol until the benchmark gate demonstrates better recovery
-cost or time-to-committed-action without a material semantic-validity
-regression across at least two model families.
+Bragi's performance advantage is still a hypothesis. It should not replace an
+existing model protocol until benchmarks show better recovery cost or
+time-to-committed-action without a material loss in semantic validity.
 
 No license has been selected yet.
