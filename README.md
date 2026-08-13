@@ -47,6 +47,106 @@ The runtime gives every accepted record a canonical sequence, preserves
 rejected records as evidence, materializes the current view, and applies its
 own policy before any effect can run.
 
+### Example: a cutoff should not erase useful state
+
+Suppose a model is describing a plan step as one streamed JSON object and the
+provider connection ends here:
+
+```json
+{
+  "type": "plan_step",
+  "intent": "Add replay support",
+  "acceptance": "The same log produces the same state",
+  "status": "in-prog
+```
+
+The intent and acceptance text arrived, but the enclosing value never became
+valid JSON. A consumer must buffer it, adopt partial-JSON semantics, or ask the
+model to generate the object again.
+
+With Bragi, complete records before the cutoff already have defined meaning:
+
+```text
++ @s1 plan_step
++ @s1.intent "Add replay support"
++ @s1.acceptance "The same log produces the same state"
++ @s1.status "in-prog
+```
+
+The first three records are accepted into draft `@s1`. The incomplete final
+record is diagnostic evidence only and does not mutate the draft. The host can
+resume from the last canonical sequence; the model does not need to recreate
+the accepted prefix.
+
+### Example: correction should happen before execution
+
+A model may realize that its first command is incomplete only after emitting
+it. If a closed tool-call object is also the dispatch boundary, there is no
+safe interval in which to revise it.
+
+Bragi keeps the request mutable until an explicit commit proposal:
+
+```text
++ @t1 tool
++ @t1.name "shell.run"
++ @t1.arguments.command "go test ./..."
+~ @t1.arguments.command "go test -race ./..."
++ @t1.reason "Check concurrent access before accepting the change"
+! @t1
+```
+
+Both command values remain in canonical history, while the materialized draft
+contains only the replacement. Even after `commit.accepted`, the command is
+merely eligible for the host's sandbox, capability, policy, budget, and
+idempotency checks. No source line directly runs it.
+
+### Example: partial content should not be misrouted
+
+Streaming content to a client before its speaker, audience, or channel is
+known can expose text in the wrong place. The Midgard profile marks those
+fields as publication guards:
+
+```text
++ @m1 message
++ @m1.content |
+|The deployment contains a security-sensitive migration.
+! @m1.content
++ @m1.speaker "assistant"
++ @m1.audience "maintainer"
++ @m1.channel "private-review"
+! @m1
+```
+
+The runtime may materialize the content immediately, but a projection
+withholds it until all routing guards contain accepted, closed values and any
+host routing predicate passes. Once publishable, later revisions retain the
+same entity identity instead of creating a second message.
+
+### Example: “done” is not evidence that the task is done
+
+A model can request completion:
+
+```text
++ @done1 completion
++ @done1.requested_outcome "done"
+! @done1
+```
+
+That commit may be perfectly valid Bragi while the task still has a failed
+check, unresolved effect, or blocking finding. The host evaluates its own
+completion contract and may append a result such as:
+
+```json
+{
+  "kind": "completion.evaluated",
+  "outcome": "incomplete",
+  "remaining": ["check:test-race", "finding:data-race"]
+}
+```
+
+The canonical host result, not provider EOF or the model-authored word
+`"done"`, controls lifecycle state.
+
 ## The source language
 
 The core language has four primary operators:
