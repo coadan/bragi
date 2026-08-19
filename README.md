@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/bragi-logo.png" alt="Bragi" width="360">
+</p>
+
 # Bragi
 
 **Make partial LLM output useful, structured, and safe.**

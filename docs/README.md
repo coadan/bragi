@@ -11,7 +11,8 @@ Read in this order:
 7. [Decisions](decisions/README.md) — durable architectural choices:
    [model language versus transport](decisions/0001-separate-model-language-from-transport.md)
    [runtime-accepted commits](decisions/0002-runtime-accepted-commits-before-effects.md),
-   and the [stable v1 source language](decisions/0003-stabilize-the-v1-source-language.md).
+   the [stable v1 source language](decisions/0003-stabilize-the-v1-source-language.md),
+   and [bounded deterministic recovery](decisions/0004-recover-deterministic-source-variations.md).
 
 The [Midgard profile](../profiles/midgard-v1.md) explains the coding-harness
 mapping; its [machine-readable form](../profiles/midgard-v1.json) is used by
