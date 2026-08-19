@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"bragi"
+	"github.com/coadan/bragi"
 )
 
 func main() {

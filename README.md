@@ -237,4 +237,6 @@ Bragi's performance advantage is still a hypothesis. It should not replace an
 existing model protocol until benchmarks show better recovery cost or
 time-to-committed-action without a material loss in semantic validity.
 
-No license has been selected yet.
+## License
+
+Bragi is released under the [Apache License 2.0](LICENSE).
